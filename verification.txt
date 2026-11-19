@@ -1,0 +1,16 @@
+Node v24.11.0
+combat.wasm SHA-256 62e4470c6650b3255fc8de99c6beb84bd94c95d732d45fe9867c49d782b58fe7
+  tick=103 attack=A17 target=E04 OUTSIDE_WINDOW hp=100 commits=0
+  tick=104 attack=A17 target=E04 INVULNERABLE hp=100 commits=0
+  tick=105 attack=A17 target=E04 HIT hp=75 commits=1
+  tick=106 attack=A17 target=E04 DUPLICATE hp=75 commits=1
+  tick=107 attack=A17 target=E04 OUTSIDE_WINDOW hp=75 commits=1
+PASS window boundaries, invulnerability and exact-once damage
+PASS same-frame duplicate contact
+PASS one swing hits each of two targets once
+PASS guard and parry leave hit quota intact
+PASS interrupt and stale callback are rejected
+PASS new instance may damage the same target again
+PASS sweep detects a crossing missed by both endpoint overlaps
+PASS invalid candidate and reused instance leave HP intact
+8 / 8 scenarios passed

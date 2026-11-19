@@ -1,0 +1,327 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Hit Window Lab · 近战判定试验场</title>
+<style>
+  :root { color-scheme: dark; font-family: 'Segoe UI', 'Microsoft YaHei', sans-serif; color: #e8eef0; background: #101618; --green: #b5f6a0; --muted: #9baeb2; --line: #2e4043; }
+  * { box-sizing: border-box; }
+  body { margin: 0; }
+  main { width: min(1220px, calc(100% - 36px)); margin: 0 auto; padding: 34px 0; }
+  header { display: flex; justify-content: space-between; align-items: end; gap: 24px; padding-bottom: 22px; border-bottom: 1px solid var(--line); }
+  .mono, .eyebrow, .metric output, td { font-family: Consolas, monospace; }
+  .eyebrow { color: var(--green); font-size: 12px; letter-spacing: .16em; }
+  h1 { font-size: clamp(29px, 5vw, 55px); margin: 7px 0 0; line-height: 1; letter-spacing: -.045em; }
+  header p { color: var(--muted); margin: 0; }
+  button { border: 1px solid #476164; background: #1d2a2e; color: #e8eef0; border-radius: 6px; padding: 10px 14px; font: inherit; font-size: 14px; cursor: pointer; }
+  button:hover { border-color: var(--green); }
+  button:focus-visible { outline: 2px solid var(--green); outline-offset: 3px; }
+  button:disabled { opacity: .45; cursor: default; }
+  button.primary { background: var(--green); color: #101c13; border-color: var(--green); font-weight: 700; }
+  .controls { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 18px 0; }
+  .controls label { color: var(--muted); font-size: 13px; display: flex; align-items: center; gap: 8px; margin-left: auto; }
+  select { font: inherit; border: 1px solid #476164; border-radius: 6px; padding: 7px 9px; background: #1b282b; color: #eef1f1; }
+  .layout { display: grid; grid-template-columns: minmax(0, 1.45fr) minmax(0, 1fr); gap: 14px; }
+  .panel { min-width: 0; background: #151f22; border: 1px solid var(--line); border-radius: 9px; overflow: hidden; }
+  .panel h2 { font-size: 15px; font-weight: 650; margin: 0; padding: 13px 16px; border-bottom: 1px solid var(--line); }
+  canvas { width: 100%; display: block; height: auto; background: #182427; }
+  .hint, .status { margin: 0; padding: 12px 15px; color: var(--muted); font-size: 13px; }
+  .status { min-height: 44px; border-top: 1px solid var(--line); line-height: 1.45; }
+  .metrics { display: grid; grid-template-columns: repeat(3, 1fr); border-bottom: 1px solid var(--line); }
+  .metric { padding: 13px 0 11px 15px; }
+  .metric span { display: block; color: var(--muted); font-size: 12px; }
+  .metric output { display: block; font-size: 26px; padding-top: 4px; color: var(--green); }
+  .log { overflow: auto; min-height: 235px; max-height: 300px; }
+  table { border-collapse: collapse; width: 100%; white-space: nowrap; }
+  th, td { text-align: left; padding: 10px 8px; border-bottom: 1px solid #253439; font-size: 12px; }
+  th:first-child, td:first-child { padding-left: 14px; }
+  th { color: var(--muted); font-weight: 500; }
+  .hit { color: var(--green); font-weight: 700; }
+  .defense { color: #8edce3; }
+  @media (max-width: 850px) { .layout { grid-template-columns: 1fr; } header { align-items: start; flex-direction: column; gap: 8px; } .controls label { margin-left: 0; } }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <div><div class="eyebrow">HIT WINDOW LAB / C++ · WASM</div><h1>近战判定试验场</h1></div>
+    <p>独立原型 · 逐帧查看伤害结算</p>
+  </header>
+  <nav class="controls" aria-label="试验场操作">
+    <button class="primary" id="replay" disabled>重放 A17 用例</button>
+    <button id="step" disabled>单步</button>
+    <button id="attack" disabled>挥击</button>
+    <button id="cancel" disabled>打断</button>
+    <button id="reset" disabled>重置</button>
+    <label>E04 防御<select id="stance"><option value="0">无防御</option><option value="1">无敌</option><option value="2">格挡</option><option value="3">弹反</option></select></label>
+  </nav>
+  <div class="layout">
+    <section class="panel" aria-label="试验场场景">
+      <h2>俯视视图</h2>
+      <canvas id="arena" width="680" height="368" aria-label="角色、目标和扫掠轨迹"></canvas>
+      <p class="hint">自由试打时用 WASD 移动，空格挥击。亮线表示刀尖扫掠。</p>
+    </section>
+    <section class="panel" aria-label="命中事件">
+      <h2>判定记录</h2>
+      <div class="metrics">
+        <div class="metric"><span>逻辑帧</span><output id="tick">—</output></div>
+        <div class="metric"><span>E04 血量</span><output id="hp">—</output></div>
+        <div class="metric"><span>已扣血次数</span><output id="commits">—</output></div>
+      </div>
+      <div class="log"><table><thead><tr><th scope="col">帧</th><th scope="col">攻击</th><th scope="col">目标</th><th scope="col">结果</th><th scope="col">血量</th></tr></thead><tbody id="rows"></tbody></table></div>
+      <p class="status" id="status" aria-live="polite">正在加载判定核心…</p>
+    </section>
+  </div>
+</main>
+<script>
+'use strict';
+const $ = (id) => document.getElementById(id);
+const labels = ['NONE', 'OUTSIDE_WINDOW', 'INTERRUPTED', 'INVULNERABLE', 'BLOCKED', 'PARRIED', 'DUPLICATE', 'HIT'];
+const canvas = $('arena');
+const ctx = canvas.getContext('2d');
+const player = { x: 236, y: 196 };
+const targets = [{ x: 335, y: 193, id: 'E04' }, { x: 401, y: 119, id: 'E05' }];
+const keys = new Set();
+let core;
+let tick = 0;
+let attackId = 0;
+let started = -100;
+let previous = null;
+let path = null;
+let displayResult = 0;
+let touchedTarget = -1;
+let mode = 'practice';
+let replayTimer = null;
+let lastTime = 0;
+let accumulator = 0;
+
+function updateMetrics() {
+  $('tick').value = tick;
+  $('hp').value = core.target_hp(0);
+  $('commits').value = core.damage_commits();
+}
+
+function draw() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.strokeStyle = '#25383b';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  for (let x = 20; x < canvas.width; x += 24) { ctx.moveTo(x, 0); ctx.lineTo(x, canvas.height); }
+  for (let y = 16; y < canvas.height; y += 24) { ctx.moveTo(0, y); ctx.lineTo(canvas.width, y); }
+  ctx.stroke();
+  for (const radius of [68, 100, 132]) circle(player.x, player.y, radius, null, '#3c5355');
+  targets.forEach((target, index) => {
+    const hp = core.target_hp(index);
+    const active = index === touchedTarget && displayResult !== 0;
+    const color = active && displayResult === 7 ? '#b5f6a0' : active ? '#8edce3' : '#eab694';
+    circle(target.x, target.y, 23, '#223134', color);
+    circle(target.x, target.y, 15, '#33474b');
+    ctx.fillStyle = '#102124';
+    ctx.fillRect(target.x - 24, target.y - 37, 48, 4);
+    ctx.fillStyle = color;
+    ctx.fillRect(target.x - 24, target.y - 37, 48 * hp / 100, 4);
+    ctx.font = '13px Consolas, monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText(`${target.id} · ${hp}`, target.x, target.y + 43);
+  });
+  if (path) {
+    const color = displayResult === 7 ? '#b5f6a0' : '#79c7ca';
+    ctx.lineCap = 'round';
+    ctx.lineWidth = 15;
+    ctx.globalAlpha = .20;
+    trace(path, color);
+    ctx.globalAlpha = 1;
+    ctx.lineWidth = 2;
+    trace(path, color);
+    circle(path[1].x, path[1].y, 4, color);
+  }
+  circle(player.x, player.y, 18, '#b5f6a0', '#d9ffd0');
+  ctx.fillStyle = '#203623';
+  ctx.beginPath();
+  ctx.moveTo(player.x + 9, player.y);
+  ctx.lineTo(player.x - 5, player.y - 6);
+  ctx.lineTo(player.x - 5, player.y + 6);
+  ctx.fill();
+  ctx.textAlign = 'left';
+  ctx.font = '14px Consolas, monospace';
+  ctx.fillStyle = '#9baeb2';
+  let phase = 'READY';
+  if (mode === 'replay') {
+    phase = tick < 104 ? 'STARTUP' : tick < 107 ? 'ACTIVE' : 'RECOVERY';
+  } else if (tick - started <= 24) {
+    phase = tick - started < 4 ? 'STARTUP' : tick - started < 16 ? 'ACTIVE' : 'RECOVERY';
+  }
+  ctx.fillText(`${attackId ? `A${attackId}` : '—'}  /  ${phase}`, 20, 29);
+}
+
+function circle(x, y, radius, fill, stroke) {
+  ctx.beginPath();
+  ctx.arc(x, y, radius, 0, Math.PI * 2);
+  if (fill) { ctx.fillStyle = fill; ctx.fill(); }
+  if (stroke) { ctx.strokeStyle = stroke; ctx.lineWidth = 1.4; ctx.stroke(); }
+}
+
+function trace([from, to], color) {
+  ctx.beginPath();
+  ctx.moveTo(from.x, from.y);
+  ctx.lineTo(to.x, to.y);
+  ctx.strokeStyle = color;
+  ctx.stroke();
+}
+
+function record(target, defense) {
+  const result = core.resolve_candidate(attackId, tick, target, defense);
+  if (result === 0) return;
+  displayResult = result;
+  touchedTarget = target;
+  const row = $('rows').insertRow();
+  const values = [tick, `A${attackId}`, targets[target].id, labels[result], core.target_hp(target)];
+  for (const value of values) row.insertCell().textContent = value;
+  if (result === 7) row.cells[3].className = 'hit';
+  if (result >= 3 && result <= 5) row.cells[3].className = 'defense';
+  if ($('rows').rows.length > 30) $('rows').deleteRow(0);
+  if (mode === 'practice') row.scrollIntoView({ block: 'nearest' });
+}
+
+function reset() {
+  clearInterval(replayTimer);
+  replayTimer = null;
+  core.reset_match();
+  Object.assign(player, { x: 236, y: 196 });
+  mode = 'practice';
+  tick = 0;
+  attackId = 0;
+  started = -100;
+  previous = null;
+  path = null;
+  displayResult = 0;
+  touchedTarget = -1;
+  $('rows').replaceChildren();
+  $('status').textContent = '点击「重放 A17 用例」查看完整样本，或点击「挥击」自由试打。';
+  updateMetrics();
+  draw();
+}
+
+function prepareReplay() {
+  reset();
+  mode = 'replay';
+  tick = 102;
+  attackId = 17;
+  core.start_attack(17, 104, 107);
+  $('status').textContent = 'A17 的有效窗口是第 104 至 106 帧。E04 在第 104 帧无敌。';
+  updateMetrics();
+  draw();
+}
+
+function replayFrame() {
+  if (tick >= 107) return;
+  tick += 1;
+  const y = 166 + (tick - 103) * 5;
+  path = [{ x: 333, y }, { x: 341, y: y + 8 }];
+  if (core.sweep_contact(path[0].x, path[0].y, path[1].x, path[1].y, targets[0].x, targets[0].y, 27)) {
+    record(0, tick === 104 ? 1 : 0);
+  }
+  updateMetrics();
+  draw();
+  if (tick === 107) {
+    clearInterval(replayTimer);
+    replayTimer = null;
+    $('status').textContent = `重放完成。E04 血量 100 → ${core.target_hp(0)}，结算 ${core.damage_commits()} 次。`;
+  }
+}
+
+function attack() {
+  if (mode !== 'practice') reset();
+  if (tick - started < 25) return;
+  started = tick;
+  attackId += 1;
+  previous = null;
+  core.start_attack(attackId, tick + 4, tick + 16);
+  $('status').textContent = `A${attackId} 挥击中。有效窗口 [${tick + 4}, ${tick + 16})。`;
+}
+
+function practiceFrame() {
+  const horizontal = Number(keys.has('d')) - Number(keys.has('a'));
+  const vertical = Number(keys.has('s')) - Number(keys.has('w'));
+  const speed = horizontal && vertical ? 1.98 : 2.8;
+  if (horizontal || vertical || tick - started <= 25) tick += 1;
+  player.x = Math.max(24, Math.min(656, player.x + horizontal * speed));
+  player.y = Math.max(24, Math.min(344, player.y + vertical * speed));
+  const age = tick - started;
+  if (age > 0 && age <= 20) {
+    const angle = -1.25 + age * .12;
+    const current = { x: player.x + Math.cos(angle) * 100, y: player.y + Math.sin(angle) * 100 };
+    path = [previous || current, current];
+    previous = current;
+    const defense = Number($('stance').value);
+    targets.forEach((target, index) => {
+      const [from, to] = path;
+      if (core.sweep_contact(from.x, from.y, to.x, to.y, target.x, target.y, 27)) {
+        record(index, index === 0 ? defense : 0);
+      }
+    });
+  } else {
+    path = null;
+  }
+}
+
+function frame(time) {
+  accumulator += Math.min(time - (lastTime || time), 100);
+  lastTime = time;
+  let changed = false;
+  while (accumulator >= 1000 / 60) {
+    if (mode === 'practice' && (keys.size || tick - started <= 25)) {
+      practiceFrame();
+      changed = true;
+    }
+    accumulator -= 1000 / 60;
+  }
+  if (changed) { updateMetrics(); draw(); }
+  requestAnimationFrame(frame);
+}
+
+async function initialize() {
+  const binary = Uint8Array.from(atob('__WASM_BASE64__'), (byte) => byte.charCodeAt(0));
+  const { instance } = await WebAssembly.instantiate(binary);
+  core = instance.exports;
+  reset();
+  for (const id of ['replay', 'step', 'attack', 'cancel', 'reset']) $(id).disabled = false;
+  $('replay').onclick = () => { prepareReplay(); replayFrame(); replayTimer = setInterval(replayFrame, 360); };
+  $('step').onclick = () => {
+    clearInterval(replayTimer);
+    replayTimer = null;
+    if (mode !== 'replay' || tick === 107) prepareReplay();
+    replayFrame();
+  };
+  $('attack').onclick = attack;
+  $('cancel').onclick = () => {
+    if (mode === 'practice' && tick - started < 16 && core.interrupt_attack(attackId)) {
+      $('status').textContent = `A${attackId} 已打断，随后到达的接触事件会被拒绝。`;
+    }
+  };
+  $('reset').onclick = reset;
+  for (const id of ['replay', 'step', 'attack', 'cancel', 'reset']) {
+    $(id).addEventListener('click', (event) => { if (event.detail > 0) $(id).blur(); });
+  }
+  window.addEventListener('keydown', (event) => {
+    if (event.target instanceof HTMLSelectElement) return;
+    if (event.code === 'Space' && !event.repeat && !(event.target instanceof HTMLButtonElement)) {
+      event.preventDefault();
+      attack();
+    }
+    const key = event.key.toLowerCase();
+    if (['w', 'a', 's', 'd'].includes(key)) keys.add(key);
+  });
+  window.addEventListener('keyup', (event) => keys.delete(event.key.toLowerCase()));
+  window.addEventListener('blur', () => keys.clear());
+  requestAnimationFrame(frame);
+}
+
+initialize().catch((error) => {
+  $('status').textContent = `无法初始化 WebAssembly · ${error.message}`;
+  console.error(error);
+});
+</script>
+</body>
+</html>
